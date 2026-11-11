@@ -1,0 +1,784 @@
+
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cat Runner Advanced</title>
+<style>
+:root{--pink:#f58db8;--dark:#74465f;--pale:#fff1f7}
+*{box-sizing:border-box}
+body{
+ margin:0;padding:15px;min-height:100vh;
+ background:linear-gradient(135deg,#ffe6f0,#f3e5ff);
+ font-family:system-ui,sans-serif;color:var(--dark);
+ display:flex;justify-content:center;
+}
+.app{
+ width:min(100%,900px);background:#fffafd;
+ border:3px solid white;border-radius:26px;padding:18px;
+ box-shadow:0 16px 45px #9e66852b;
+}
+header{text-align:center}
+h1{margin:0;color:#e875a4;font-size:clamp(25px,5vw,40px)}
+header p{margin:5px 0 14px;color:#a77b94}
+.hud{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}
+.stat{
+ background:#fff0f6;border:1px solid #ffd5e6;
+ border-radius:13px;padding:9px;text-align:center;
+ font-weight:750;font-size:14px
+}
+.stat b{display:block;font-size:20px;color:#d85e91}
+canvas{
+ width:100%;height:auto;display:block;border-radius:17px;
+ border:2px solid white;background:#fff5fa;touch-action:manipulation
+}
+.controls{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:12px 0}
+button,select{
+ border:0;border-radius:999px;padding:11px 17px;
+ font-size:15px;font-weight:750;color:var(--dark);
+ background:#ffe0ed;cursor:pointer
+}
+button.primary{background:var(--pink);color:white}
+button:disabled{opacity:.45}
+.panel{
+ background:#fff1f7;border:1px solid #ffd5e6;
+ border-radius:18px;padding:15px;text-align:center;margin-top:12px
+}
+.panel h2{margin:0 0 8px;color:#dc6d9b}
+.hidden{display:none!important}
+.small{font-size:13px;color:#a77b94;line-height:1.55}
+#message{min-height:24px;font-weight:700;color:#d45d91}
+.legend{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;font-size:13px}
+@media(max-width:560px){
+ body{padding:7px}.app{padding:11px}
+ .hud{grid-template-columns:repeat(2,1fr)}
+ button{padding:10px 13px}
+}
+</style>
+</head>
+<body>
+<main class="app">
+<header>
+<h1>🐱 Cat Runner: Advanced</h1>
+<p>Endless Runner • Power-ups • Missions • High Score</p>
+</header>
+
+<section class="hud">
+<div class="stat">คะแนน<b id="score">0</b></div>
+<div class="stat">เหรียญ<b id="coins">0</b></div>
+<div class="stat">พลังชีวิต<b id="lives">❤️❤️❤️</b></div>
+<div class="stat">สถิติสูงสุด<b id="best">0</b></div>
+</section>
+
+<canvas id="game" width="900" height="420"></canvas>
+
+<div class="controls">
+<button class="primary" id="startBtn">เริ่มเกม</button>
+<button id="pauseBtn" disabled>พักเกม</button>
+<button id="restartBtn">เริ่มใหม่</button>
+<select id="difficulty">
+<option value="easy">ง่าย</option>
+<option value="normal" selected>ปานกลาง</option>
+<option value="hard">ยาก</option>
+</select>
+</div>
+
+<div class="panel">
+<div id="message">เลือกความยากแล้วกดเริ่มเกม 💗</div>
+<div class="legend">
+<span>แตะ / Space = กระโดด</span>
+<span>กด 2 ครั้ง = Double Jump</span>
+<span>P = พักเกม</span>
+</div>
+<p class="small">ภารกิจ: เก็บเหรียญให้ครบ 15 เหรียญ</p>
+<div id="mission">ภารกิจ 0 / 15 เหรียญ</div>
+</div>
+
+<div id="endPanel" class="panel hidden">
+<h2>จบการวิ่ง! 🎀</h2>
+<p id="summary"></p>
+<button class="primary" id="againBtn">เล่นอีกครั้ง</button>
+</div>
+</main>
+
+<script>
+"use strict";
+
+/* 1. DOM และค่าคงที่ */
+const canvas=document.querySelector("#game");
+const ctx=canvas.getContext("2d");
+const $=id=>document.getElementById(id);
+
+const WIDTH=canvas.width;
+const HEIGHT=canvas.height;
+const GROUND=345;
+const STORAGE_KEY="catRunnerAdvancedBest";
+
+const DIFFICULTIES={
+ easy:{speed:4.2,spawn:105,gravity:.62},
+ normal:{speed:5.4,spawn:86,gravity:.68},
+ hard:{speed:6.8,spawn:69,gravity:.75}
+};
+
+/* 2. สถานะเกม */
+const game={
+ state:"menu",frame:0,score:0,coins:0,lives:3,
+ distance:0,speed:5.4,baseSpeed:5.4,
+ difficulty:"normal",
+ obstacles:[],pickups:[],particles:[],floatingTexts:[],
+ shieldTimer:0,magnetTimer:0,boostTimer:0,
+ combo:0,comboTimer:0,missionTarget:15
+};
+
+const player={
+ x:125,y:GROUND-58,w:52,h:58,vy:0,
+ jumps:0,maxJumps:2,invulnerable:0
+};
+
+const rand=(min,max)=>Math.random()*(max-min)+min;
+const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+/* 3. HUD และคะแนนสูงสุด */
+function setMessage(text){$("message").textContent=text}
+
+function updateHUD(){
+ $("score").textContent=Math.floor(game.score);
+ $("coins").textContent=game.coins;
+ $("lives").textContent="❤️".repeat(game.lives)+"🖤".repeat(3-game.lives);
+ $("mission").textContent=
+ `ภารกิจ ${Math.min(game.coins,15)} / 15 เหรียญ`;
+}
+
+function bestScore(){
+ return Number(localStorage.getItem(STORAGE_KEY)||0);
+}
+
+function updateBest(){
+ $("best").textContent=bestScore();
+}
+
+/* 4. เริ่มเกม / พักเกม / จบเกม */
+function resetGame(){
+ const cfg=DIFFICULTIES[game.difficulty];
+
+ game.frame=0;
+ game.score=0;
+ game.coins=0;
+ game.lives=3;
+ game.distance=0;
+ game.speed=cfg.speed;
+ game.baseSpeed=cfg.speed;
+
+ game.obstacles=[];
+ game.pickups=[];
+ game.particles=[];
+ game.floatingTexts=[];
+
+ game.shieldTimer=0;
+ game.magnetTimer=0;
+ game.boostTimer=0;
+ game.combo=0;
+ game.comboTimer=0;
+
+ player.y=GROUND-player.h;
+ player.vy=0;
+ player.jumps=0;
+ player.invulnerable=0;
+
+ updateHUD();
+ updateBest();
+}
+
+function startGame(){
+ if(game.state==="running")return;
+
+ game.difficulty=$("difficulty").value;
+ resetGame();
+
+ game.state="running";
+ $("startBtn").disabled=true;
+ $("pauseBtn").disabled=false;
+ $("pauseBtn").textContent="พักเกม";
+
+ setMessage("เริ่มแล้ว! กระโดดหลบและเก็บไอเทม!");
+}
+
+function togglePause(){
+ if(game.state==="running"){
+  game.state="paused";
+  $("pauseBtn").textContent="เล่นต่อ";
+  setMessage("พักเกมอยู่ ⏸");
+ }else if(game.state==="paused"){
+  game.state="running";
+  $("pauseBtn").textContent="พักเกม";
+  setMessage("ลุยต่อเลย!");
+ }
+}
+
+function endGame(){
+ if(game.state==="over")return;
+
+ game.state="over";
+ const finalScore=Math.floor(game.score);
+ const oldBest=bestScore();
+
+ if(finalScore>oldBest){
+  localStorage.setItem(STORAGE_KEY,String(finalScore));
+ }
+
+ updateBest();
+ updateHUD();
+
+ $("startBtn").disabled=false;
+ $("pauseBtn").disabled=true;
+ $("endPanel").classList.remove("hidden");
+
+ $("summary").textContent=
+ `คะแนน ${finalScore} • เหรียญ ${game.coins} • ระยะทาง ${Math.floor(game.distance)} เมตร`+
+ (finalScore>oldBest?" • สถิติใหม่! 🏆":"");
+
+ setMessage("ขอบคุณที่เล่น Cat Runner 💗");
+}
+
+/* 5. ระบบกระโดดสองจังหวะ */
+function jump(){
+ if(game.state!=="running")return;
+
+ if(player.jumps<player.maxJumps){
+  player.vy=player.jumps===0?-13.5:-11.5;
+  player.jumps++;
+  burst(player.x+player.w/2,player.y+player.h,"#f3a8c6",5);
+ }
+}
+
+function updatePlayer(){
+ const gravity=DIFFICULTIES[game.difficulty].gravity;
+
+ player.vy+=gravity;
+ player.y+=player.vy;
+
+ if(player.y+player.h>=GROUND){
+  player.y=GROUND-player.h;
+  player.vy=0;
+  player.jumps=0;
+ }
+
+ if(player.invulnerable>0)player.invulnerable--;
+}
+
+/* 6. สร้างสิ่งกีดขวางและไอเทม */
+function spawnObstacle(){
+ const type=Math.random()<.25?"tall":"box";
+ const h=type==="tall"?rand(68,91):rand(37,53);
+ const w=type==="tall"?rand(35,46):rand(40,56);
+
+ game.obstacles.push({
+  x:WIDTH+20,y:GROUND-h,w,h,type,passed:false
+ });
+}
+
+function spawnPickup(){
+ const roll=Math.random();
+ let type="coin";
+
+ if(roll>.91)type="shield";
+ else if(roll>.83)type="magnet";
+ else if(roll>.75)type="boost";
+
+ game.pickups.push({
+  x:WIDTH+15,y:rand(205,285),
+  r:type==="coin"?13:16,type,phase:rand(0,6)
+ });
+}
+
+/* 7. เอฟเฟกต์ */
+function spawnParticle(x,y,color){
+ game.particles.push({
+  x,y,vx:rand(-2.5,2.5),vy:rand(-3,0),
+  life:rand(18,32),color,size:rand(2,5)
+ });
+}
+
+function burst(x,y,color,count=12){
+ for(let i=0;i<count;i++)spawnParticle(x,y,color);
+}
+
+function floatingText(x,y,text,color="#d85e91"){
+ game.floatingTexts.push({x,y,text,color,life:55});
+}
+
+/* 8. ตรวจสอบการชน */
+function intersects(a,b){
+ return a.x<b.x+b.w&&a.x+a.w>b.x&&
+        a.y<b.y+b.h&&a.y+a.h>b.y;
+}
+
+function damagePlayer(){
+ if(player.invulnerable>0)return;
+
+ if(game.shieldTimer>0){
+  game.shieldTimer=0;
+  player.invulnerable=75;
+  burst(player.x+25,player.y+25,"#83d8c0",18);
+  floatingText(player.x,player.y-8,"SHIELD BLOCK!","#45ad91");
+  return;
+ }
+
+ game.lives--;
+ player.invulnerable=100;
+ game.combo=0;
+
+ burst(player.x+25,player.y+25,"#ef7caa",16);
+ floatingText(player.x,player.y-8,"-1 LIFE","#e45f8e");
+
+ updateHUD();
+ if(game.lives<=0)endGame();
+}
+
+/* 9. เก็บเหรียญและไอเทมพิเศษ */
+function collectPickup(item){
+ if(item.type==="coin"){
+  game.coins++;
+  game.combo++;
+  game.comboTimer=100;
+
+  game.score+=100+Math.min(game.combo,10)*10;
+
+  floatingText(
+   item.x,item.y-15,
+   game.combo>1?"COMBO x"+game.combo:"+100"
+  );
+
+  burst(item.x,item.y,"#ffd66e",8);
+
+  if(game.coins===game.missionTarget){
+   game.score+=1000;
+   floatingText(350,150,"MISSION COMPLETE +1000","#48ad8b");
+   setMessage("ภารกิจสำเร็จ! โบนัส 1,000 คะแนน 🎉");
+  }
+ }
+ else if(item.type==="shield"){
+  game.shieldTimer=480;
+  floatingText(item.x,item.y,"SHIELD!","#45ad91");
+ }
+ else if(item.type==="magnet"){
+  game.magnetTimer=480;
+  floatingText(item.x,item.y,"MAGNET!","#8b79d8");
+ }
+ else if(item.type==="boost"){
+  game.boostTimer=240;
+  floatingText(item.x,item.y,"SPEED BOOST!","#e79b42");
+ }
+
+ updateHUD();
+}
+
+/* 10. ระบบชนและแม่เหล็ก */
+function updateCollisions(){
+ const hitbox={
+  x:player.x+8,y:player.y+7,
+  w:player.w-16,h:player.h-10
+ };
+
+ for(const o of game.obstacles){
+  if(intersects(hitbox,o)){
+   o.remove=true;
+   damagePlayer();
+  }else if(!o.passed&&o.x+o.w<player.x){
+   o.passed=true;
+   game.score+=25;
+  }
+ }
+
+ game.obstacles=game.obstacles.filter(
+  o=>!o.remove&&o.x+o.w>-10
+ );
+
+ for(const p of game.pickups){
+  if(game.magnetTimer>0&&p.type==="coin"){
+   const dx=player.x+player.w/2-p.x;
+   const dy=player.y+player.h/2-p.y;
+
+   if(Math.hypot(dx,dy)<190){
+    p.x+=dx*.10;
+    p.y+=dy*.10;
+   }
+  }
+
+  const box={
+   x:p.x-p.r,y:p.y-p.r,
+   w:p.r*2,h:p.r*2
+  };
+
+  if(intersects(hitbox,box)){
+   collectPickup(p);
+   p.remove=true;
+  }
+ }
+
+ game.pickups=game.pickups.filter(p=>!p.remove&&p.x>-30);
+}
+
+/* 11. อัปเดตโลกเกม */
+function updateWorld(){
+ game.frame++;
+ game.distance+=game.speed*.08;
+
+ const progression=Math.min(3.5,game.frame/1800);
+
+ game.speed=game.baseSpeed+progression+
+  (game.boostTimer>0?2.4:0);
+
+ game.score+=.12*game.speed;
+
+ const cfg=DIFFICULTIES[game.difficulty];
+ const interval=Math.max(38,cfg.spawn-Math.floor(game.frame/260));
+
+ if(game.frame%interval===0)spawnObstacle();
+ if(game.frame%72===0)spawnPickup();
+
+ if(game.shieldTimer>0)game.shieldTimer--;
+ if(game.magnetTimer>0)game.magnetTimer--;
+ if(game.boostTimer>0)game.boostTimer--;
+
+ if(game.comboTimer>0)game.comboTimer--;
+ else game.combo=0;
+
+ game.obstacles.forEach(o=>o.x-=game.speed);
+ game.pickups.forEach(p=>{
+  p.x-=game.speed;
+  p.phase+=.08;
+ });
+
+ updatePlayer();
+ updateCollisions();
+
+ game.particles.forEach(p=>{
+  p.x+=p.vx;p.y+=p.vy;
+  p.vy+=.12;p.life--;
+ });
+
+ game.particles=game.particles.filter(p=>p.life>0);
+
+ game.floatingTexts.forEach(t=>{
+  t.y-=.6;t.life--;
+ });
+
+ game.floatingTexts=game.floatingTexts.filter(t=>t.life>0);
+
+ if(game.frame%6===0)updateHUD();
+}
+
+/* 12. วาดฉาก */
+function drawBackground(){
+ const grad=ctx.createLinearGradient(0,0,0,HEIGHT);
+ grad.addColorStop(0,"#fff6fb");
+ grad.addColorStop(1,"#ffe4ef");
+
+ ctx.fillStyle=grad;
+ ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+ // เมฆ
+ ctx.fillStyle="rgba(255,255,255,.9)";
+
+ for(let i=0;i<5;i++){
+  const x=(
+   (i*220-game.frame*game.speed*.22)%
+   (WIDTH+150)+WIDTH+150
+  )%(WIDTH+150)-60;
+
+  const y=55+(i%2)*36;
+
+  ctx.beginPath();
+  ctx.arc(x,y,22,0,Math.PI*2);
+  ctx.arc(x+25,y-9,29,0,Math.PI*2);
+  ctx.arc(x+54,y,21,0,Math.PI*2);
+  ctx.fill();
+ }
+
+ // เนิน
+ ctx.fillStyle="#f6c7dc";
+ ctx.beginPath();
+ ctx.moveTo(0,GROUND);
+
+ for(let x=0;x<=WIDTH;x+=30){
+  ctx.lineTo(
+   x,300+Math.sin((x+game.frame*1.2)/80)*15
+  );
+ }
+
+ ctx.lineTo(WIDTH,GROUND);
+ ctx.closePath();
+ ctx.fill();
+
+ // พื้นหญ้า
+ ctx.fillStyle="#bfead5";
+ ctx.fillRect(0,GROUND,WIDTH,HEIGHT-GROUND);
+
+ ctx.fillStyle="#8dd4b2";
+ ctx.fillRect(0,GROUND,WIDTH,6);
+
+ ctx.fillStyle="rgba(255,255,255,.7)";
+
+ for(let i=0;i<24;i++){
+  const x=(
+   (i*55-game.frame*game.speed)%(WIDTH+50)+WIDTH+50
+  )%(WIDTH+50);
+
+  ctx.fillRect(x,GROUND+20+(i%3)*13,22,3);
+ }
+}
+
+/* 13. วาดตัวละครแมว */
+function drawCat(){
+ if(player.invulnerable>0&&Math.floor(player.invulnerable/7)%2===0)return;
+
+ const x=player.x,y=player.y;
+
+ // หาง
+ ctx.strokeStyle="#d98aaa";
+ ctx.lineWidth=7;
+ ctx.lineCap="round";
+
+ ctx.beginPath();
+ ctx.moveTo(x+8,y+42);
+ ctx.quadraticCurveTo(x-14,y+25,x+1,y+17);
+ ctx.stroke();
+
+ // ลำตัว
+ ctx.fillStyle="#fff";
+ ctx.strokeStyle="#d9a2ba";
+ ctx.lineWidth=2;
+
+ ctx.beginPath();
+ ctx.ellipse(x+27,y+43,21,14,0,0,Math.PI*2);
+ ctx.fill();ctx.stroke();
+
+ // หัว
+ ctx.beginPath();
+ ctx.roundRect(x+7,y+7,39,37,12);
+ ctx.fill();ctx.stroke();
+
+ // หู
+ ctx.beginPath();
+ ctx.moveTo(x+9,y+17);
+ ctx.lineTo(x+12,y-3);
+ ctx.lineTo(x+25,y+11);
+ ctx.fill();ctx.stroke();
+
+ ctx.beginPath();
+ ctx.moveTo(x+29,y+11);
+ ctx.lineTo(x+43,y-3);
+ ctx.lineTo(x+45,y+18);
+ ctx.fill();ctx.stroke();
+
+ // ด้านในหู
+ ctx.fillStyle="#f3a9c5";
+ ctx.beginPath();
+ ctx.moveTo(x+14,y+9);
+ ctx.lineTo(x+14,y+4);
+ ctx.lineTo(x+21,y+12);
+ ctx.fill();
+
+ ctx.beginPath();
+ ctx.moveTo(x+34,y+12);
+ ctx.lineTo(x+41,y+4);
+ ctx.lineTo(x+39,y+13);
+ ctx.fill();
+
+ // ตาและจมูก
+ ctx.fillStyle="#65485a";
+ ctx.beginPath();
+ ctx.arc(x+19,y+25,2.4,0,7);
+ ctx.arc(x+35,y+25,2.4,0,7);
+ ctx.fill();
+
+ ctx.fillStyle="#ef8eae";
+ ctx.beginPath();
+ ctx.arc(x+27,y+31,2.5,0,7);
+ ctx.fill();
+
+ // ปาก
+ ctx.strokeStyle="#9a6a82";
+ ctx.lineWidth=1.5;
+ ctx.beginPath();
+ ctx.moveTo(x+27,y+33);
+ ctx.quadraticCurveTo(x+22,y+38,x+19,y+34);
+ ctx.moveTo(x+27,y+33);
+ ctx.quadraticCurveTo(x+32,y+38,x+35,y+34);
+ ctx.stroke();
+
+ // โบว์
+ ctx.fillStyle="#f47eae";
+ ctx.beginPath();
+ ctx.arc(x+42,y+12,5,0,7);
+ ctx.arc(x+50,y+12,5,0,7);
+ ctx.fill();
+
+ // วงโล่
+ if(game.shieldTimer>0){
+  ctx.strokeStyle="#70cdb0";
+  ctx.lineWidth=3;
+  ctx.beginPath();
+  ctx.arc(x+27,y+29,39,0,7);
+  ctx.stroke();
+ }
+}
+
+/* 14. วาดสิ่งกีดขวาง */
+function drawObstacle(o){
+ ctx.fillStyle=o.type==="tall"?"#b982a4":"#c58aab";
+ ctx.strokeStyle="#9e6689";
+ ctx.lineWidth=2;
+
+ ctx.beginPath();
+ ctx.roundRect(o.x,o.y,o.w,o.h,7);
+ ctx.fill();ctx.stroke();
+
+ ctx.fillStyle="#f9d7e7";
+ ctx.fillRect(o.x+8,o.y+8,8,5);
+ ctx.fillRect(o.x+o.w-16,o.y+8,8,5);
+}
+
+/* 15. วาดเหรียญและไอเทม */
+function drawPickup(p){
+ const bob=Math.sin(p.phase)*5;
+
+ ctx.save();
+ ctx.translate(p.x,p.y+bob);
+
+ if(p.type==="coin"){
+  ctx.fillStyle="#ffd66e";
+  ctx.strokeStyle="#e5ad43";
+  ctx.lineWidth=2;
+
+  ctx.beginPath();
+  ctx.arc(0,0,p.r,0,Math.PI*2);
+  ctx.fill();ctx.stroke();
+
+  ctx.fillStyle="#fff5c7";
+  ctx.font="bold 16px sans-serif";
+  ctx.textAlign="center";
+  ctx.fillText("$",0,6);
+ }else{
+  const colors={
+   shield:"#83d8c0",
+   magnet:"#a99be8",
+   boost:"#ffc078"
+  };
+
+  ctx.fillStyle=colors[p.type];
+  ctx.beginPath();
+  ctx.arc(0,0,p.r,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.fillStyle="white";
+  ctx.font="bold 17px sans-serif";
+  ctx.textAlign="center";
+
+  ctx.fillText(
+   p.type==="shield"?"S":
+   p.type==="magnet"?"M":"⚡",0,6
+  );
+ }
+
+ ctx.restore();
+}
+
+/* 16. วาดเอฟเฟกต์ */
+function drawEffects(){
+ game.particles.forEach(p=>{
+  ctx.globalAlpha=clamp(p.life/25,0,1);
+  ctx.fillStyle=p.color;
+  ctx.fillRect(p.x,p.y,p.size,p.size);
+ });
+
+ ctx.globalAlpha=1;
+
+ game.floatingTexts.forEach(t=>{
+  ctx.globalAlpha=clamp(t.life/30,0,1);
+  ctx.fillStyle=t.color;
+  ctx.font="bold 16px sans-serif";
+  ctx.fillText(t.text,t.x,t.y);
+ });
+
+ ctx.globalAlpha=1;
+}
+
+/* 17. แสดงผลเกม */
+function render(){
+ drawBackground();
+
+ game.pickups.forEach(drawPickup);
+ game.obstacles.forEach(drawObstacle);
+
+ drawCat();
+ drawEffects();
+
+ if(game.state==="paused"){
+  ctx.fillStyle="rgba(90,55,78,.35)";
+  ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+  ctx.fillStyle="white";
+  ctx.textAlign="center";
+  ctx.font="bold 42px sans-serif";
+  ctx.fillText("PAUSED",WIDTH/2,HEIGHT/2);
+ }
+}
+
+/* 18. Game Loop */
+let lastTime=0;
+let accumulator=0;
+const FIXED_STEP=1000/60;
+
+function gameLoop(timestamp){
+ if(!lastTime)lastTime=timestamp;
+
+ const delta=Math.min(100,timestamp-lastTime);
+ lastTime=timestamp;
+
+ if(game.state==="running"){
+  accumulator+=delta;
+
+  while(accumulator>=FIXED_STEP){
+   updateWorld();
+   accumulator-=FIXED_STEP;
+  }
+ }
+
+ render();
+ requestAnimationFrame(gameLoop);
+}
+
+/* 19. การควบคุม */
+$("startBtn").addEventListener("click",startGame);
+$("againBtn").addEventListener("click",startGame);
+$("restartBtn").addEventListener("click",startGame);
+$("pauseBtn").addEventListener("click",togglePause);
+
+canvas.addEventListener("pointerdown",e=>{
+ e.preventDefault();
+ jump();
+});
+
+window.addEventListener("keydown",e=>{
+ if(e.code==="Space"||e.code==="ArrowUp"){
+  e.preventDefault();
+  jump();
+ }
+
+ if(e.key.toLowerCase()==="p")togglePause();
+});
+
+document.addEventListener("visibilitychange",()=>{
+ if(document.hidden&&game.state==="running")togglePause();
+});
+
+/* 20. เริ่มต้นระบบ */
+updateBest();
+render();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
